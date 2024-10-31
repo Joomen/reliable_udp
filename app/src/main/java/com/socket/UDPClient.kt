@@ -1,7 +1,6 @@
 import kotlinx.coroutines.*
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import kotlin.time.Duration.Companion.seconds
@@ -40,6 +39,7 @@ class ReliableImageSender(
             sendPackets(socket, imageData, address)
         }
     }
+
     fun close() {
         scope.cancel()
         isRunning = false
@@ -65,17 +65,13 @@ class ReliableImageSender(
                 // 버퍼에 청크 저장
                 packetBuffer[currentSequence] = chunk
 
-
-                    socket.send(packet)
-                    println("Chunk ${currentSequence} 전송")
-                    currentSequence++
-
-                }
-
+                socket.send(packet)
+                println("Chunk ${currentSequence} 전송")
+                currentSequence++
+            }
         } finally {
             isRunning = false
         }
-        println("Send killed")
     }
 
     private suspend fun receiveAcks(socket: DatagramSocket, address: InetSocketAddress) {
@@ -83,31 +79,26 @@ class ReliableImageSender(
         val receivePacket = DatagramPacket(buffer, buffer.size)
         var retryCount = 0
         val maxRetries = 3  // 최대 재시도 횟수
-        var exit = false
 
         socket.soTimeout = 3000
-        while (!exit) {
+        while (true) {
             try {
                 withTimeout(timeout.seconds) {
-                    println("1")
-                        socket.receive(receivePacket)
-                    print(2)
+                    socket.receive(receivePacket)
                     // ACK 패킷 파싱
                     val data = receivePacket.data.copyOfRange(0, receivePacket.length)
                     val missingSequences = parseMissingSequences(data)
 
-                    if (missingSequences.isEmpty() ) {
+                    if (missingSequences.isEmpty()) {
                         // 모든 패킷이 성공적으로 전송됨
                         println("전송 완료")
                         isRunning = false
-                        exit = true
                         return@withTimeout
                     }
-                    print(3)
+
                     // 일반적인 재전송
                     println("재전송 필요한 시퀀스: $missingSequences")
                     resendMissingPackets(socket, address, missingSequences)
-
                 }
             } catch (e: TimeoutCancellationException) {
                 println("타임아웃 발생: 마지막 패킷 재전송")
@@ -119,15 +110,13 @@ class ReliableImageSender(
                     if (retryCount >= maxRetries) {
                         println("최대 재시도 횟수 초과")
                         isRunning = false
-                        exit = true
                     }
                 }
             } catch (e: Exception) {
                 println("ACK 수신 오류: ${e.message}")
+            } finally {
             }
         }
-        println("Receive Acks Ended")
-        close()
     }
 
     private fun parseMissingSequences(data: ByteArray): List<Int> {
@@ -140,7 +129,6 @@ class ReliableImageSender(
         socket: DatagramSocket,
         address: InetSocketAddress
     ) {
-
         packetBuffer[currentBiggestSequence]?.let { chunk ->
             val packetData = createPacketData(chunk, currentBiggestSequence, currentBiggestSequence)
             val packet = DatagramPacket(packetData, packetData.size, address)
@@ -177,3 +165,4 @@ class ReliableImageSender(
         }.array()
     }
 }
+

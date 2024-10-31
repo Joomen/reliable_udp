@@ -1,3 +1,4 @@
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetSocketAddress
@@ -23,12 +24,16 @@ fun main() = runBlocking {
         println("이미지 전송 시작... (수신자 주소: $receiverAddress)")
 
         // 이미지 전송
-        sender.sendImage(imageData, receiverAddress)
-
+        val sendJob = launch {
+            sender.sendImage(imageData, receiverAddress)
+        }
         println("전송 프로세스 시작됨")
 
+        sendJob.join()
+
+
         // 메인 스레드가 즉시 종료되지 않도록 대기
-        while (true) {
+        for (i in 1..3) {
             Thread.sleep(1000)
         }
     } catch (e: Exception) {
