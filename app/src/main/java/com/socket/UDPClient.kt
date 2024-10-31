@@ -1,9 +1,15 @@
+package com.socket
+
 import kotlinx.coroutines.*
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import kotlin.time.Duration.Companion.seconds
+
+class TransferFailedException(message: String) : Exception(message) {
+}
 
 data class PacketHeader(
     val sequenceNumber: Int,
@@ -23,16 +29,12 @@ class ReliableImageSender(
     private var isRunning = true
     private var currentBiggestSequence = 0
     private var lastPacketSent = false
+    private var done = false
 
     fun sendImage(imageData: ByteArray, address: InetSocketAddress) {
         val socket = DatagramSocket()
         val totalChunks = (imageData.size + chunkSize - 1) / chunkSize
         currentBiggestSequence = totalChunks - 1
-
-        // ACK 수신 처리 코루틴
-        scope.launch {
-            receiveAcks(socket, address)
-        }
 
         // 패킷 전송 코루틴
         scope.launch {
@@ -52,7 +54,7 @@ class ReliableImageSender(
     ) {
         try {
             var currentSequence = 0
-
+            // 전송중인 패킷이 가장 큰 시퀀스보다 작거나 같은 동안 반복
             while (isRunning && currentSequence <= currentBiggestSequence) {
                 val start = currentSequence * chunkSize
                 val end = minOf(start + chunkSize, imageData.size)
@@ -67,7 +69,12 @@ class ReliableImageSender(
 
                 socket.send(packet)
                 println("Chunk ${currentSequence} 전송")
+                Thread.sleep(1)
                 currentSequence++
+            }
+            lastPacketSent = true
+            scope.launch {
+                receiveAcks(socket, address)
             }
         } finally {
             isRunning = false
@@ -81,18 +88,22 @@ class ReliableImageSender(
         val maxRetries = 3  // 최대 재시도 횟수
 
         socket.soTimeout = 3000
-        while (true) {
+        while (retryCount < maxRetries && !done ) {
             try {
                 withTimeout(timeout.seconds) {
+                    println("ACK 대기중...")
                     socket.receive(receivePacket)
+                    retryCount = 0
+                    println("ACK 수신됨")
                     // ACK 패킷 파싱
                     val data = receivePacket.data.copyOfRange(0, receivePacket.length)
                     val missingSequences = parseMissingSequences(data)
+                    println("ACK 수신: $missingSequences")
 
                     if (missingSequences.isEmpty()) {
                         // 모든 패킷이 성공적으로 전송됨
                         println("전송 완료")
-                        isRunning = false
+                        done = true
                         return@withTimeout
                     }
 
@@ -100,21 +111,21 @@ class ReliableImageSender(
                     println("재전송 필요한 시퀀스: $missingSequences")
                     resendMissingPackets(socket, address, missingSequences)
                 }
-            } catch (e: TimeoutCancellationException) {
+            } catch (e: SocketTimeoutException) {
                 println("타임아웃 발생: 마지막 패킷 재전송")
-                if (!lastPacketSent) {
+                if (lastPacketSent) {
                     resendLastPacket(socket, address)
-                    lastPacketSent = true
                     retryCount++
-
                     if (retryCount >= maxRetries) {
                         println("최대 재시도 횟수 초과")
-                        isRunning = false
+                        return
+//                        throw TransferFailedException("패킷 전송 실패")
                     }
                 }
             } catch (e: Exception) {
                 println("ACK 수신 오류: ${e.message}")
             } finally {
+                println("receiveAcks 종료")
             }
         }
     }
